@@ -1,3 +1,4 @@
+import { evolutionArtwork, evolutionPokemonUrl } from './domain/evolutions';
 import { addToSelection, removeFromSelection, filterCatalog } from './domain/collection';
 import { PokeApi } from './data/poke-api';
 import { FavoritesStore } from './data/favorites-store';
@@ -10,6 +11,18 @@ export class App {
   private readonly api = inject(PokeApi);
   private readonly favorites = inject(FavoritesStore);
   readonly Math = Math;
+  readonly evolutionArtwork = evolutionArtwork;
+  evolutionLoading=signal(false); evolutionError=signal(''); private evolutionRequest=0;
+  async selectEvolution(species:Ref){
+    const request=++this.evolutionRequest;
+    const previous=this.selected();
+    this.evolutionError.set('');
+    if(previous?.species.name===species.name)return;
+    this.evolutionLoading.set(true);
+    try{const pokemon=await this.api.get<Pokemon>(evolutionPokemonUrl(species));if(request!==this.evolutionRequest||this.selected()!==previous)return;await this.select(pokemon)}
+    catch{if(request===this.evolutionRequest&&this.selected()===previous)this.evolutionError.set('No se ha podido cargar esta evolución. Inténtalo de nuevo.')}
+    finally{if(request===this.evolutionRequest)this.evolutionLoading.set(false)}
+  }
   generations=signal<Ref[]>([]); versions=signal<Ref[]>([]); generation=signal(''); game=signal(''); generationNames=signal<Set<string>|null>(null); gameNames=signal<Set<string>|null>(null); filterMessage=signal('');
   teamIds=signal<number[]>(this.readTeam()); team=signal<Pokemon[]>([]); compareIds=signal<number[]>([]); compared=signal<Pokemon[]>([]); teamWeaknesses=signal<{name:string;count:number}[]>([]); toolMessage=signal(''); private generationRequest=0;private gameRequest=0;private teamRequest=0;private compareRequest=0;
   private readTeam():number[]{try{const x=JSON.parse(localStorage.getItem('pokeatlas:team')||'[]');return Array.isArray(x)?[...new Set<number>(x.filter(n=>Number.isInteger(n)&&n>0))].slice(0,6):[]}catch{return []}}
