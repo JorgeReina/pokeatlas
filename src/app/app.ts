@@ -1,3 +1,4 @@
+import { defensiveEffectiveness, DamageRelations, DefensiveEffectiveness } from './domain/type-effectiveness';
 import { evolutionArtwork, evolutionPokemonUrl } from './domain/evolutions';
 import { addToSelection, removeFromSelection, filterCatalog } from './domain/collection';
 import { PokeApi } from './data/poke-api';
@@ -24,13 +25,30 @@ export class App {
     finally{if(request===this.evolutionRequest)this.evolutionLoading.set(false)}
   }
   generations=signal<Ref[]>([]); versions=signal<Ref[]>([]); generation=signal(''); game=signal(''); generationNames=signal<Set<string>|null>(null); gameNames=signal<Set<string>|null>(null); filterMessage=signal('');
-  teamIds=signal<number[]>(this.readTeam()); team=signal<Pokemon[]>([]); compareIds=signal<number[]>([]); compared=signal<Pokemon[]>([]); teamWeaknesses=signal<{name:string;count:number}[]>([]); toolMessage=signal(''); private generationRequest=0;private gameRequest=0;private teamRequest=0;private compareRequest=0;
+  teamIds=signal<number[]>(this.readTeam()); team=signal<Pokemon[]>([]); compareIds=signal<number[]>([]); compared=signal<Pokemon[]>([]); compareEffectiveness=signal<Record<number, DefensiveEffectiveness | null>>({}); teamWeaknesses=signal<{name:string;count:number}[]>([]); toolMessage=signal(''); private generationRequest=0;private gameRequest=0;private teamRequest=0;private compareRequest=0;
   private readTeam():number[]{try{const x=JSON.parse(localStorage.getItem('pokeatlas:team')||'[]');return Array.isArray(x)?[...new Set<number>(x.filter(n=>Number.isInteger(n)&&n>0))].slice(0,6):[]}catch{return []}}
   private async loadSelections(ids:number[]):Promise<Pokemon[]>{return Promise.all(ids.map(id=>this.api.get<Pokemon>(`https://pokeapi.co/api/v2/pokemon/${id}`)))}
   async updateTeam(id:number, remove=false){const next=remove?removeFromSelection(this.teamIds(),id):addToSelection(this.teamIds(),id,6);if(!remove&&next===this.teamIds()){this.toolMessage.set('El equipo admite hasta seis Pokémon distintos.');return}this.toolMessage.set('');this.teamIds.set(next);try{localStorage.setItem('pokeatlas:team',JSON.stringify(next))}catch{}await this.loadTeam()}
   async loadTeam(){const token=++this.teamRequest;try{const list=await this.loadSelections(this.teamIds());if(token!==this.teamRequest)return;this.team.set(list);const maps=await Promise.all(list.map(p=>this.getWeaknesses(p)));if(token!==this.teamRequest)return;const counts=new Map<string,number>();for(const group of maps)for(const name of group)counts.set(name,(counts.get(name)||0)+1);this.teamWeaknesses.set([...counts].map(([name,count])=>({name,count})).sort((a,b)=>b.count-a.count))}catch{this.toolMessage.set('No se han podido cargar los datos del equipo.');}}
-  async updateCompare(id:number,remove=false){const next=remove?removeFromSelection(this.compareIds(),id):addToSelection(this.compareIds(),id,2);if(!remove&&next===this.compareIds()){this.toolMessage.set('El comparador admite dos Pokémon distintos.');return}this.toolMessage.set('');this.compareIds.set(next);const token=++this.compareRequest;try{const result=await this.loadSelections(next);if(token===this.compareRequest)this.compared.set(result)}catch{this.toolMessage.set('No se ha podido cargar la comparación.')}}
-  async getWeaknesses(p:Pokemon):Promise<string[]>{const relations=await Promise.all(p.types.map(t=>this.api.get<{damage_relations:{double_damage_from:Ref[];half_damage_from:Ref[];no_damage_from:Ref[]}}>(t.type.url)));const m=new Map<string,number>();for(const {damage_relations:r} of relations)for(const [key,factor] of [['double_damage_from',2],['half_damage_from',.5],['no_damage_from',0]] as const)for(const t of r[key])m.set(t.name,(m.get(t.name)??1)*factor);return [...m].filter(([,v])=>v>1).map(([k])=>k)}
+  async updateCompare(id:number,remove=false){
+    const next=remove?removeFromSelection(this.compareIds(),id):addToSelection(this.compareIds(),id,2);
+    if(!remove&&next===this.compareIds()){this.toolMessage.set('El comparador admite dos Pokémon distintos.');return}
+    this.toolMessage.set('');this.compareIds.set(next);const token=++this.compareRequest;
+    this.compareEffectiveness.set({});
+    try{
+      const result=await this.loadSelections(next);
+      if(token!==this.compareRequest)return;
+      this.compared.set(result);
+      const effects=await Promise.allSettled(result.map(p=>this.getEffectiveness(p)));
+      if(token!==this.compareRequest)return;
+      this.compareEffectiveness.set(Object.fromEntries(result.map((p,i)=>[p.id,effects[i].status==='fulfilled'?effects[i].value:null])));
+    }catch{if(token===this.compareRequest)this.toolMessage.set('No se ha podido cargar la comparación.')}
+  }
+  async getEffectiveness(p:Pokemon):Promise<DefensiveEffectiveness>{
+    const relations=await Promise.all(p.types.map(t=>this.api.get<{damage_relations:DamageRelations}>(t.type.url)));
+    return defensiveEffectiveness(relations.map(r=>r.damage_relations));
+  }
+  async getWeaknesses(p:Pokemon):Promise<string[]>{return (await this.getEffectiveness(p)).weaknesses.map(w=>w.name)}
   async setGeneration(value:string){const token=++this.generationRequest;this.generation.set(value);this.page.set(0);this.loading.set(true);++this.requestId;try{const data=value?await this.api.get<{pokemon_species:Ref[]}>(`https://pokeapi.co/api/v2/generation/${value}`):null;if(token!==this.generationRequest)return;this.generationNames.set(data?new Set(data.pokemon_species.map(x=>x.name)):null);await this.refresh()}catch{if(token===this.generationRequest){this.loading.set(false);this.error.set('No se ha podido cargar la generación.')}}}
   async setGame(value:string){const token=++this.gameRequest;this.game.set(value);this.page.set(0);this.filterMessage.set('');this.loading.set(true);++this.requestId;try{if(!value){this.gameNames.set(null);await this.refresh();return}const version=await this.api.get<{version_group:Ref}>(`https://pokeapi.co/api/v2/version/${value}`);const group=await this.api.get<{pokedexes:Ref[]}>(version.version_group.url);const dexes=await Promise.all(group.pokedexes.map(x=>this.api.get<{pokemon_entries:{pokemon_species:Ref}[]}>(x.url)));if(token!==this.gameRequest)return;this.gameNames.set(new Set(dexes.flatMap(d=>d.pokemon_entries.map(e=>e.pokemon_species.name))));this.filterMessage.set(dexes.length?'Pokémon incluidos en las Pokédex asociadas a este juego según PokéAPI. No indica dónde se capturan.':'La PokéAPI no proporciona una Pokédex asociada a este juego.');await this.refresh()}catch{if(token===this.gameRequest){this.loading.set(false);this.error.set('No se ha podido cargar la Pokédex del juego.')}}}
   readonly types = ['normal','fire','water','electric','grass','ice','fighting','poison','ground','flying','psychic','bug','rock','ghost','dragon','dark','steel','fairy'];
