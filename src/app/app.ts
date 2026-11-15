@@ -1,13 +1,14 @@
+import { FilterMenu } from './filter-menu';
 import { defensiveEffectiveness, DamageRelations, DefensiveEffectiveness } from './domain/type-effectiveness';
 import { evolutionArtwork, evolutionPokemonUrl } from './domain/evolutions';
 import { addToSelection, removeFromSelection, filterCatalog } from './domain/collection';
 import { PokeApi } from './data/poke-api';
 import { FavoritesStore } from './data/favorites-store';
 import { Pokemon, Ref } from './models/pokemon';
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, computed, HostListener, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 
-@Component({selector:'app-root',imports:[FormsModule],templateUrl:'./app.html',styleUrl:'./app.css'})
+@Component({selector:'app-root',imports:[FormsModule,FilterMenu],templateUrl:'./app.html',styleUrl:'./app.css'})
 export class App {
   private readonly api = inject(PokeApi);
   private readonly favorites = inject(FavoritesStore);
@@ -53,6 +54,12 @@ export class App {
   async setGame(value:string){const token=++this.gameRequest;this.game.set(value);this.page.set(0);this.filterMessage.set('');this.loading.set(true);++this.requestId;try{if(!value){this.gameNames.set(null);await this.refresh();return}const version=await this.api.get<{version_group:Ref}>(`https://pokeapi.co/api/v2/version/${value}`);const group=await this.api.get<{pokedexes:Ref[]}>(version.version_group.url);const dexes=await Promise.all(group.pokedexes.map(x=>this.api.get<{pokemon_entries:{pokemon_species:Ref}[]}>(x.url)));if(token!==this.gameRequest)return;this.gameNames.set(new Set(dexes.flatMap(d=>d.pokemon_entries.map(e=>e.pokemon_species.name))));this.filterMessage.set(dexes.length?'Pokémon incluidos en las Pokédex asociadas a este juego según PokéAPI. No indica dónde se capturan.':'La PokéAPI no proporciona una Pokédex asociada a este juego.');await this.refresh()}catch{if(token===this.gameRequest){this.loading.set(false);this.error.set('No se ha podido cargar la Pokédex del juego.')}}}
   readonly types = ['normal','fire','water','electric','grass','ice','fighting','poison','ground','flying','psychic','bug','rock','ghost','dragon','dark','steel','fairy'];
   readonly labels:Record<string,string>={normal:'Normal',fire:'Fuego',water:'Agua',electric:'Eléctrico',grass:'Planta',ice:'Hielo',fighting:'Lucha',poison:'Veneno',ground:'Tierra',flying:'Volador',psychic:'Psíquico',bug:'Bicho',rock:'Roca',ghost:'Fantasma',dragon:'Dragón',dark:'Siniestro',steel:'Acero',fairy:'Hada'};
+  readonly typeOptions = computed(() => [{value:'',label:'Todos los tipos'}, ...this.types.map(value=>({value,label:this.labels[value]||value}))]);
+  readonly generationOptions = computed(() => [{value:'',label:'Todas'}, ...this.generations().map(g=>({value:g.name,label:g.name.replace('generation-','').toUpperCase()}))]);
+  readonly gameOptions = computed(() => [{value:'',label:'Todos'}, ...this.versions().map(v=>({value:v.name,label:v.name.replaceAll('-',' ')}))]);
+  showBackToTop=signal(false);
+  @HostListener('window:scroll') onScroll(){this.showBackToTop.set(window.scrollY > 400)}
+  backToTop(){window.scrollTo({top:0,behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'})}
   readonly statLabels:Record<string,string>={hp:'PS',attack:'Ataque',defense:'Defensa','special-attack':'At. especial','special-defense':'Def. especial',speed:'Velocidad'};
   list=signal<Ref[]>([]); cards=signal<Pokemon[]>([]); selected=signal<Pokemon|null>(null); description=signal(''); evolutions=signal<Ref[]>([]); weaknesses=signal<string[]>([]); loading=signal(true); error=signal(''); query=signal(''); type=signal(''); favoritesOnly=signal(false); page=signal(0); total=signal(0); favoriteIds=signal<number[]>(this.favorites.read()); typeNames=signal<Set<string>|null>(null);  private requestId=0; private typeRequestId=0; private searchTimer:ReturnType<typeof setTimeout>|undefined;
   favoriteCount=computed(()=>this.favoriteIds().length);
